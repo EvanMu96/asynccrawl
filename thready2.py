@@ -1,5 +1,6 @@
-from queue import Queue
+from multiprocessing.pool import ThreadPool
 from threading import Thread, Lock
+from queue import Queue
 import urllib.parse
 import re
 import time
@@ -15,7 +16,6 @@ class Fetcher(Thread):
         # tasks作为任务队列
         self.tasks = tasks
         self.daemon = True
-        self.start()
 
     def run(self):
         while True:
@@ -81,21 +81,15 @@ class Fetcher(Thread):
         return headers.get('Content-Type', '').startswith('text/html')
 
 
-class ThreadPool(object):
-    def __init__(self, num_thread):
-        self.tasks = Queue()
-        for _ in range(num_thread):
-            Fetcher(self.tasks)
-
-    def add_task(self, url):
-        self.tasks.put(url)
-
-    def wait_completion(self):
-        self.tasks.join()
 
 if __name__ == '__main__':
     start = time.time()
-    pool = ThreadPool(4)
-    pool.add_task("/")
-    pool.wait_completion()
-    print('%s URLs fetched in %s second' % (len(seen_urls), time.time()-start))
+    pool = ThreadPool()
+    tasks = Queue()
+    tasks.put('/')
+    Workers = [Fetcher(tasks) for i in range(4)]
+    pool.map_async(lambda w:w.run(), Workers)
+    tasks.join()
+    pool.close()
+
+    print('{} URLs fetched in {:.1f} seconds'.format(len(seen_urls), time.time()-start))
