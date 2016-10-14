@@ -1,4 +1,4 @@
-from selectors import  DefaultSelector, EVENT_WRITE
+from selectors import *
 import socket
 import time
 import re
@@ -35,14 +35,14 @@ class Fetcher(object):
         selector.register(self.sock.fileno(), EVENT_WRITE, self.connected)
 
     def connected(self, key, mask):
-        print('connected!')
+        # print('connected!')
         # 接触该socket上的所有绑定
         selector.unregister(key.fd)
         get = 'GET {} HTTP/1.0\nHost: localhost\n\n'.format(self.url)
 
         self.sock.send(get.encode('ascii'))
         # 建立连接后绑定读取相应的回调函数
-        selector.register(key.fd, EVENT_WRITE, self.read_response)
+        selector.register(key.fd, EVENT_READ, self.read_response)
 
     def read_response(self, key, mask):
         global stopped
@@ -65,20 +65,20 @@ class Fetcher(object):
                 stopped = True
             print(self.url)
 
-    def parse_links(self, fetched_url, response):
-        if not response:
-            print('error: %s' % fetched_url)
+    def parse_links(self):
+        if not self.response:
+            print('error: %s' % self.url)
             return set()
-        if not self._is_html(response):
+        if not self._is_html():
             return set()
 
         # 通过html的href属性找到所有的链接
-        urls = set(re.findall(r'''(?i)href=["']?([^\s"'<>]+)''', self.body(response)))
+        urls = set(re.findall(r'''(?i)href=["']?([^\s"'<>]+)''', self.body()))
 
         links = set()
         for url in urls:
             # 可能找到的url是相对路径，这时候就需要join一下吗，绝对路径的话就还是返回url
-            normalized = urllib.parse.urljoin(fetched_url, url)
+            normalized = urllib.parse.urljoin(self.url, url)
             # url的信息会被分段存在parts里
             parts = urllib.parse.urlparse(normalized)
             if parts.scheme not in ('', 'http', 'https'):
@@ -93,13 +93,13 @@ class Fetcher(object):
         return links
 
     # 提取得到报文的html正文
-    def body(self, response):
-        body = response.split(b'\r\n\r\n', 1)[1]
+    def body(self):
+        body = self.response.split(b'\r\n\r\n', 1)[1]
         return body.decode('utf-8')
 
     # 根据header的MIME判断是否为html文件
-    def _is_html(self, response):
-        head, body = response.split(b'\r\n\r\n', 1)
+    def _is_html(self):
+        head, body = self.response.split(b'\r\n\r\n', 1)
         headers = dict(h.split(': ') for h in head.decode().split('\r\n')[1:])
         return headers.get('Content-Type', '').startswith('text/html')
 
@@ -118,4 +118,4 @@ if __name__ == '__main__':
         for event_key, event_mask in events:
             callback = event_key.data
             callback(event_key, event_mask)
-    print('{} URLs fetched in {:.1f} second'.format(len(seen_url), time.time()-start))
+    print('{} URLs fetched in {:.1f} second, achieved concurrency = {}'.format(len(seen_url), time.time()-start, concurrency_achieved))
