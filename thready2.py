@@ -68,7 +68,6 @@ class Fetcher(Thread):
             defragmented, frag = urllib.parse.urldefrag(parts.path)
             links.add(defragmented)
         return links
-
     # 提取得到报文的html正文
     def body(self, response):
         body = response.split(b'\r\n\r\n', 1)[1]

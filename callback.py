@@ -103,10 +103,6 @@ class Fetcher(object):
         headers = dict(h.split(': ') for h in head.decode().split('\r\n')[1:])
         return headers.get('Content-Type', '').startswith('text/html')
 
-
-
-
-
 # 建立事件循环
 # 当stopped时停止
 if __name__ == '__main__':
