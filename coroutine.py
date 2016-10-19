@@ -3,7 +3,6 @@ import socket
 import re
 import urllib.parse
 import time
-import asyncio
 
 class Future(object):
     def __init__(self):
@@ -48,19 +47,114 @@ class Task(object):
 
         next_future.add_done_callback(self.step)
 
+urls_seen = set(['/'])
+urls_todo = set(['/'])
+# 追加一个可以查看并发数量的变量
+concurrency_achieved = 0
+selector = DefaultSelector()
+stopped = False
 
-class Fetcher(object):
+def connect(sock, address):
+    f = Future()
+    sock.setblocking(False)
+    try:
+        sock.connect(address)
+    except BlockingIOError:
+        pass
+
+    def on_connected():
+        f.set_result(None)
+
+    selector.register(sock.fileno(), EVENT_WRITE, on_connected)
+    yield from f
+    selector.unregister(sock.fileno())
+
+
+def read(sock):
+    f = Future()
+
+    def on_readable():
+        f.set_result(sock.recv(4096))  # Read 4k at a time.
+
+    selector.register(sock.fileno(), EVENT_READ, on_readable)
+    chunk = yield from f
+    selector.unregister(sock.fileno())
+    return chunk
+
+
+def read_all(sock):
+    response = []
+    chunk = yield from read(sock)
+    while chunk:
+        response.append(chunk)
+        chunk = yield from read(sock)
+
+    return b''.join(response)
+
+
+class Fetcher:
+    def __init__(self, url):
+        self.response = b''
+        self.url = url
+
     def fetch(self):
-        self.sock = socket.socket()
-        self.sock.setblocking(False)
-        try:
-            self.sock.connect(('localhost', 3000))
-        except BlockingIOError:
-            pass
+        global concurrency_achieved, stopped
+        concurrency_achieved = max(concurrency_achieved, len(urls_todo))
 
-        f = Future()
+        sock = socket.socket()
+        yield from connect(sock, ('xkcd.com', 80))
+        get = 'GET {} HTTP/1.0\r\nHost: xkcd.com\r\n\r\n'.format(self.url)
+        sock.send(get.encode('ascii'))
+        self.response = yield from read_all(sock)
 
-        def on_connect():
-            # 连接建立后通过set_result协程继续从yield的地方往下运行
-            f.set_result(None)
+        self._process_response()
+        urls_todo.remove(self.url)
+        if not urls_todo:
+            stopped = True
+        print(self.url)
 
+    def body(self):
+        body = self.response.split(b'\r\n\r\n', 1)[1]
+        return body.decode('utf-8')
+
+    def _process_response(self):
+        if not self.response:
+            print('error: {}'.format(self.url))
+            return
+        if not self._is_html():
+            return
+        urls = set(re.findall(r'''(?i)href=["']?([^\s"'<>]+)''',
+                              self.body()))
+
+        for url in urls:
+            normalized = urllib.parse.urljoin(self.url, url)
+            parts = urllib.parse.urlparse(normalized)
+            if parts.scheme not in ('', 'http', 'https'):
+                continue
+            host, port = urllib.parse.splitport(parts.netloc)
+            if host and host.lower() not in ('xkcd.com', 'www.xkcd.com'):
+                continue
+            defragmented, frag = urllib.parse.urldefrag(parts.path)
+            if defragmented not in urls_seen:
+                urls_todo.add(defragmented)
+                urls_seen.add(defragmented)
+                Task(Fetcher(defragmented).fetch())
+
+    def _is_html(self):
+        head, body = self.response.split(b'\r\n\r\n', 1)
+        headers = dict(h.split(': ') for h in head.decode().split('\r\n')[1:])
+        return headers.get('Content-Type', '').startswith('text/html')
+
+
+start = time.time()
+fetcher = Fetcher('/')
+Task(fetcher.fetch())
+
+while not stopped:
+    events = selector.select()
+    for event_key, event_mask in events:
+        callback = event_key.data
+        callback()
+
+print('{} URLs fetched in {:.1f} seconds, achieved concurrency = {}'.format(
+    len(urls_seen), time.time() - start, concurrency_achieved))
